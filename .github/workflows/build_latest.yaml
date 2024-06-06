@@ -1,0 +1,39 @@
+name: container build latest
+on:
+  workflow_run:
+    workflows: ["Test"]
+    branches: [main]
+    types:
+      - completed
+
+jobs:
+  container_image:
+    name: container_image
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@main
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@master
+      - name: image name
+        id: set-image-name
+        run: |
+          name="$(echo ${{ github.repository }} | tr 'A-Z' 'a-z')"
+          echo "image=ghcr.io/$name:latest" >> $GITHUB_OUTPUT
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@master
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push Docker image
+        uses: docker/build-push-action@master
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.set-image-name.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
