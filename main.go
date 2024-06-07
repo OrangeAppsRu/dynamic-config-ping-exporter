@@ -108,12 +108,14 @@ func main() {
 	}
 	defer watcher.Stop()
 
+	timer := time.NewTimer(5 * time.Minute)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
-		case <-time.After(5 * time.Minute):
+		case <-timer.C:
+			klog.Infof("Get nodes by timeout")
 			currentTargets, err := getNodesIP(&ctx, clientset)
 			if err != nil {
 				klog.Errorf("Failed to get nodes IP: %v", err)
@@ -124,6 +126,7 @@ func main() {
 			if err != nil {
 				klog.Errorf("Failed to update ConfigMap: %v", err)
 			}
+			timer.Reset(5 * time.Minute)
 
 		case event := <-watcher.ResultChan():
 
