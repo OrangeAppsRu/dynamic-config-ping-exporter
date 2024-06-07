@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"reflect"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -64,7 +65,7 @@ func main() {
 	}()
 
 	cfg := getConfig(&ctx, clientset, namespace, configMapName)
-	defaultTargets := cfg.Targets
+	defaultTargets := getDefaultTargets(cfg.Targets)
 
 	// read current nodes to targets
 	tries := 0
@@ -103,17 +104,26 @@ func main() {
 	// watch nodes
 	watcher, err := clientset.CoreV1().Nodes().Watch(ctx, metav1.ListOptions{})
 	if err != nil {
-		klog.Errorf("Failed to watch Nodes: %v", err)
-		return
+		klog.Fatalf("Failed to watch Nodes: %v", err)
 	}
 	defer watcher.Stop()
+
+	// watch coonfigMap
+	watcherConfigMap, err := clientset.CoreV1().ConfigMaps(namespace).Watch(ctx, metav1.ListOptions{
+		FieldSelector: fmt.Sprintf("metadata.name=%s", configMapName),
+	})
+	if err != nil {
+		klog.Fatalf("Failed to watch ConfigMap '%s': %v", configMapName, err)
+	}
+	defer watcherConfigMap.Stop()
 
 	timer := time.NewTimer(5 * time.Minute)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-
+		
+		// Get nodes by timeout
 		case <-timer.C:
 			klog.Infof("Get nodes by timeout")
 			currentTargets, err := getNodesIP(&ctx, clientset)
@@ -121,13 +131,18 @@ func main() {
 				klog.Errorf("Failed to get nodes IP: %v", err)
 				continue
 			}
-			cfg.Targets = uniqueTargets(append(defaultTargets, currentTargets...))
-			err = updateConfigMap(&ctx, clientset, namespace, configMapName, cfg)
-			if err != nil {
-				klog.Errorf("Failed to update ConfigMap: %v", err)
+			newTargets := uniqueTargets(append(defaultTargets, currentTargets...))
+			
+			if compareTargets(cfg.Targets, newTargets) {
+				err = updateConfigMap(&ctx, clientset, namespace, configMapName, cfg)
+				if err != nil {
+					klog.Errorf("Failed to update ConfigMap: %v", err)
+				}
 			}
+
 			timer.Reset(5 * time.Minute)
 
+		// Watch nodes
 		case event := <-watcher.ResultChan():
 
 			node, ok := event.Object.(*corev1.Node)
@@ -155,6 +170,38 @@ func main() {
 					klog.Errorf("Failed to update ConfigMap: %v", err)
 				}
 				klog.Infof("Node deleted: %s", node.Name)
+			}
+		
+		// Watch ConfigMap
+		case event := <-watcherConfigMap.ResultChan():
+			configMap, ok := event.Object.(*corev1.ConfigMap)
+			if !ok {
+				klog.Errorf("Unexpected object type: %T", event.Object)
+				continue
+			}
+			
+			switch event.Type {
+			case watch.Modified:
+				klog.Infof("ConfigMap modified")
+				lastFieldManager := getLastFieldManager(configMap)
+				klog.Infof("Last field manager: %s", lastFieldManager)
+
+				if lastFieldManager != fieldManager {
+					klog.Infof("ConfigMap was changed by another the field manager: %s. Reread the config", lastFieldManager)
+					cfg := getConfig(&ctx, clientset, namespace, configMapName)
+					defaultTargets = getDefaultTargets(cfg.Targets)
+					currentTargets, err := getNodesIP(&ctx, clientset)
+					if err != nil {
+						klog.Errorf("Failed to get nodes IP: %v", err)
+						continue
+					}
+					cfg.Targets = uniqueTargets(append(defaultTargets, currentTargets...))
+					
+					err = updateConfigMap(&ctx, clientset, namespace, configMapName, cfg)
+					if err != nil {
+						klog.Errorf("Failed to update ConfigMap: %v", err)
+					}
+				}
 			}
 		}
 	}
@@ -321,6 +368,7 @@ func addNodeToTargets(node corev1.Node, targets []pconfig.TargetConfig) []pconfi
 			Addr: internalIP,
 			Labels: map[string]string{
 				"target_name": node.Name,
+				"added_by":    fieldManager,
 			},
 		})
 	}
@@ -336,4 +384,30 @@ func nodeExistsInTargets(node corev1.Node, targets []pconfig.TargetConfig) bool 
 		}
 	}
 	return false
+}
+
+func compareTargets(targets1 []pconfig.TargetConfig, targets2 []pconfig.TargetConfig) bool {
+	return reflect.DeepEqual(targets1, targets2)
+}
+
+func getLastFieldManager(configMap *corev1.ConfigMap) string {
+	lastFieldManager := ""
+	lastModified := time.Time{}
+	for _, field := range configMap.ManagedFields {
+		if field.Time.After(lastModified) {
+			lastModified = field.Time.Time
+			lastFieldManager = field.Manager
+		}
+	}
+	return lastFieldManager
+}
+
+func getDefaultTargets(targets []pconfig.TargetConfig) []pconfig.TargetConfig {
+	defaultTargets := make([]pconfig.TargetConfig, 0)
+	for _, target := range targets {
+		if _, exists := target.Labels["added_by"]; !exists || target.Labels["added_by"] != fieldManager {
+			defaultTargets = append(defaultTargets, target)
+		}
+	}
+	return defaultTargets
 }
