@@ -240,6 +240,14 @@ ping:
 }
 
 func updateConfigMap(ctx *context.Context, clientset *kubernetes.Clientset, namespace string, configMapName string, cfg pconfig.Config) error {
+	_, err := clientset.CoreV1().ConfigMaps(namespace).Get(*ctx, configMapName, metav1.GetOptions{})
+
+	create := false
+	if err != nil && !k8sErrors.IsNotFound(err) {
+		klog.Infof("[updateConfigMap]: failed to get ConfigMap: %v. Create new configMap", err)
+		create = true
+	} 
+	
 
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -254,14 +262,21 @@ func updateConfigMap(ctx *context.Context, clientset *kubernetes.Clientset, name
 			"config.yaml": string(data),
 		},
 	}
-	_, err = clientset.CoreV1().ConfigMaps(configMap.Namespace).Update(*ctx, configMap, metav1.UpdateOptions{
-		FieldManager: fieldManager,
-	})
+
+	if create {
+		_, err = clientset.CoreV1().ConfigMaps(namespace).Create(*ctx, configMap, metav1.CreateOptions{
+			FieldManager: fieldManager,
+		})
+	} else {
+		_, err = clientset.CoreV1().ConfigMaps(configMap.Namespace).Update(*ctx, configMap, metav1.UpdateOptions{
+			FieldManager: fieldManager,
+		})
+	}
 
 	if err != nil {
-		return fmt.Errorf("[updateConfigMap]: Failed to apply ConfigMap: %v", err)
+		return fmt.Errorf("[updateConfigMap]: Failed to apply or create ConfigMap: %v", err)
 	} else {
-		klog.Info("[updateConfigMap]: ConfigMap apply successfully")
+		klog.Info("[updateConfigMap]: ConfigMap apply/create successfully")
 	}
 
 	return nil
