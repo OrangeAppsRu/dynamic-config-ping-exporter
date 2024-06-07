@@ -136,15 +136,15 @@ func main() {
 			switch event.Type {
 
 			case watch.Added:
-				klog.Infof("Node added: %s", node.Name)
-				cfg.Targets = uniqueTargets(addNodeToTargets(*node, cfg.Targets))
-				err = updateConfigMap(&ctx, clientset, namespace, configMapName, cfg)
-				if err != nil {
-					klog.Errorf("Failed to update ConfigMap: %v", err)
+				if !nodeExistsInTargets(*node, cfg.Targets) {
+					klog.Infof("New node added: %s", node.Name)
+					cfg.Targets = uniqueTargets(addNodeToTargets(*node, cfg.Targets))
+					err = updateConfigMap(&ctx, clientset, namespace, configMapName, cfg)
+					if err != nil {
+						klog.Errorf("Failed to update ConfigMap: %v", err)
+					}
 				}
 
-			case watch.Modified:
-				klog.Infof("Node modified: %s", node.Name)
 			case watch.Deleted:
 				cfg.Targets = uniqueTargets(removeNodeFromTargets(*node, cfg.Targets))
 				err = updateConfigMap(&ctx, clientset, namespace, configMapName, cfg)
@@ -176,10 +176,9 @@ func getConfig(ctx *context.Context, clientset *kubernetes.Clientset, namespace 
 	// try to get the ConfigMap
 	var configMap *corev1.ConfigMap
 	found := false
+	tries := 0
 	for {
 		var err error
-		tries := 0
-
 		configMap, err = clientset.CoreV1().ConfigMaps(namespace).Get(*ctx, configMapName, metav1.GetOptions{})
 
 		if err != nil && !k8sErrors.IsNotFound(err) {
@@ -323,4 +322,15 @@ func addNodeToTargets(node corev1.Node, targets []pconfig.TargetConfig) []pconfi
 		})
 	}
 	return targets
+}
+
+// Check if a node exists in the targets
+func nodeExistsInTargets(node corev1.Node, targets []pconfig.TargetConfig) bool {
+	nodeName := node.Name
+	for _, target := range targets {
+		if target.Labels["target_name"] == nodeName {
+			return true
+		}
+	}
+	return false
 }
