@@ -69,6 +69,8 @@ func main() {
 
 	// read current nodes to targets
 	tries := 0
+	watcherNodesReopenTries := 0
+	watcherConfigMapReopenTries := 0
 	for {
 		currentTargets, err := getNodesIP(&ctx, clientset)
 		if err != nil {
@@ -144,10 +146,27 @@ func main() {
 
 		// Watch nodes
 		case event := <-watcher.ResultChan():
+			if event.Object == nil {
+				klog.Error("The watch channel nodes has been closed")
+				watcher.Stop()
+				watcher, err = clientset.CoreV1().Nodes().Watch(ctx, metav1.ListOptions{})
+				if err != nil {
+					klog.Errorf("Failed to reopen watch channel: %v", err)
+					watcherNodesReopenTries++
+					time.Sleep(1 * time.Second)
+					if watcherNodesReopenTries > 20 {
+						klog.Fatalf("Failed to reopen watch channel for nodes after 20 tries")
+					}
+					continue
+				}
+				watcherNodesReopenTries = 0
+				continue
+			}
 
 			node, ok := event.Object.(*corev1.Node)
 			if !ok {
 				klog.Errorf("Unexpected object type: %T", event.Object)
+				time.Sleep(1 * time.Second)
 				continue
 			}
 
@@ -174,9 +193,30 @@ func main() {
 		
 		// Watch ConfigMap
 		case event := <-watcherConfigMap.ResultChan():
+
+			if event.Object == nil {
+				klog.Error("The watch channel configMap has been closed")
+				watcherConfigMap.Stop()
+				watcherConfigMap, err = clientset.CoreV1().ConfigMaps(namespace).Watch(ctx, metav1.ListOptions{
+					FieldSelector: fmt.Sprintf("metadata.name=%s", configMapName),
+				})
+				if err != nil {
+					klog.Errorf("Failed to reopen watch channel: %v", err)
+					watcherConfigMapReopenTries++
+					time.Sleep(1 * time.Second)
+					if watcherConfigMapReopenTries > 20 {
+						klog.Fatalf("Failed to reopen watch channel for configMap after 20 tries")
+					}
+					continue
+				}
+				watcherConfigMapReopenTries = 0
+				continue
+			}
+
 			configMap, ok := event.Object.(*corev1.ConfigMap)
 			if !ok {
 				klog.Errorf("Unexpected object type: %T", event.Object)
+				time.Sleep(1 * time.Second)
 				continue
 			}
 			
