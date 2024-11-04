@@ -296,6 +296,9 @@ ping:
 	interval: 5s
 	payload-size: 64
 	timeout: 1s
+options:
+	disableIPv6: true
+	disableIPv4: false
 `
 
 	useDefaultConfig := func() pconfig.Config {
