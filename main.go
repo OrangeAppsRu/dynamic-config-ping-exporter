@@ -397,15 +397,23 @@ func removeNodeFromTargets(node corev1.Node, targets []pconfig.TargetConfig) []p
 
 func addNodeToTargets(node corev1.Node, targets []pconfig.TargetConfig) []pconfig.TargetConfig {
 	internalIP := ""
+	externalIP := ""
 	for _, address := range node.Status.Addresses {
 		if address.Type == corev1.NodeInternalIP {
 			internalIP = address.Address
-			break
+		}
+		if address.Type == corev1.NodeExternalIP {
+			externalIP = address.Address
 		}
 	}
-	if internalIP != "" {
+	nodeIP := internalIP
+	if nodeIP == "" {
+		nodeIP = externalIP
+	}
+
+	if nodeIP != "" {
 		targets = append(targets, pconfig.TargetConfig{
-			Addr: internalIP,
+			Addr: nodeIP,
 			Labels: map[string]string{
 				"target_name": node.Name,
 				"added_by":    fieldManager,

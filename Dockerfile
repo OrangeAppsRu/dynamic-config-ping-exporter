@@ -9,7 +9,7 @@ COPY ./main.go ./
 
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o ./dynamic-config-ping-exporter .
 
-FROM docker.io/alpine:3.20.0 AS certificates
+FROM docker.io/alpine:3.20.3 AS certificates
 RUN apk add --no-cache ca-certificates
 
 FROM scratch
